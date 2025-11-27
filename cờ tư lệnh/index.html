@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Game Cờ Vua - 1v1 & vs Máy</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/css/chessboard-1.0.0.min.css" integrity="sha512-+3yV7xv2gqg1m+2f2a4H0XkQjv1n6v0y3s5gM1k2Yl7b3QKk6G2Lp9bQ3Xc8f5R9n7Q2Vb6H8Y2KfXv0p1w==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:0;padding:20px;background:#f5f7fb;color:#111}
+    .app{max-width:980px;margin:0 auto;display:grid;grid-template-columns:360px 1fr;gap:18px;align-items:start}
+    .panel{background:#fff;padding:16px;border-radius:12px;box-shadow:0 6px 20px rgba(29,29,31,0.06)}
+    h1{font-size:20px;margin:0 0 8px}
+    .controls{display:flex;flex-direction:column;gap:8px}
+    .row{display:flex;gap:8px;align-items:center}
+    button{cursor:pointer;padding:8px 10px;border-radius:8px;border:1px solid #ddd;background:#fff}
+    select,input[type=range]{width:100%}
+    #board{width:100%;max-width:640px;margin:0 auto}
+    .status{margin-top:8px;font-weight:600}
+    @media (max-width:900px){.app{grid-template-columns:1fr;}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="panel">
+      <h1>Game Cờ Vua</h1>
+      <div class="controls">
+        <div class="row">
+          <label for="mode">Chế độ:</label>
+          <select id="mode">
+            <option value="1v1">1 vs 1 (2 người chơi)</option>
+            <option value="ai">Solo (vs Máy)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="aiColor">Máy chơi màu:</label>
+          <select id="aiColor">
+            <option value="black">Đen</option>
+            <option value="white">Trắng</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="difficulty">Độ khó (depth): <span id="depthLabel">2</span></label>
+          <input type="range" id="difficulty" min="1" max="4" value="2">
+        </div>
+        <div class="row">
+          <button id="startBtn">Bắt đầu / Khởi động lại</button>
+          <button id="undoBtn">Hoàn tác</button>
+          <button id="flipBtn">Lật bàn cờ</button>
+        </div>
+        <div class="row">
+          <div class="status" id="status">Trạng thái: sẵn sàng</div>
+        </div>
+        <hr>
+        <div>
+          Hướng dẫn ngắn:
+          <ul>
+            <li>Chọn chế độ 1v1 để hai người chơi dùng cùng một máy (lượt thay phiên).</li>
+            <li>Chọn chế độ Solo để chơi với máy. Máy dùng thuật toán minimax đơn giản (đếm giá trị quân).</li>
+            <li>Sử dụng nút Hoàn tác để trả lại 1 nước trước đó.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" style="text-align:center">
+      <div id="board"></div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.13.4/chess.min.js" integrity="sha512-M6j1y1hGq6bq3c6o8yS6/2w3m2Xj9p9F2z3qV5l6nX8a2b1cY1q2M3p4r5s6t7u8v9w0x1y2z3a4b5c6d7e8f==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/chessboard-js/1.0.0/js/chessboard-1.0.0.min.js" integrity="sha512-abc123" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+    // Lưu ý: code dùng chess.js (logic) và chessboard.js (UI). Yêu cầu truy cập internet để tải các thư viện CDN.
+
+    const boardEl = document.getElementById('board');
+    const statusEl = document.getElementById('status');
+    const modeSelect = document.getElementById('mode');
+    const aiColorSelect = document.getElementById('aiColor');
+    const difficulty = document.getElementById('difficulty');
+    const depthLabel = document.getElementById('depthLabel');
+    const startBtn = document.getElementById('startBtn');
+    const undoBtn = document.getElementById('undoBtn');
+    const flipBtn = document.getElementById('flipBtn');
+
+    depthLabel.textContent = difficulty.value;
+    difficulty.oninput = ()=> depthLabel.textContent = difficulty.value;
+
+    let board = null;
+    let game = new Chess();
+    let $boardConfig = {
+      draggable: true,
+      position: 'start',
+      onDragStart: onDragStart,
+      onDrop: onDrop,
+      onSnapEnd: onSnapEnd
+    };
+
+    function init() {
+      game.reset();
+      if (board) board.destroy();
+      board = Chessboard(boardEl, $boardConfig);
+      statusEl.textContent = 'Trạng thái: ván mới - ' + (modeSelect.value === 'ai' ? 'Solo' : '1 vs 1');
+      if (modeSelect.value === 'ai' && aiColorSelect.value === 'white') {
+        // máy chơi trắng -> máy đi trước
+        setTimeout(aiPlay, 300);
+      }
+    }
+
+    function onDragStart(source, piece, position, orientation) {
+      if (game.game_over()) return false;
+      // Nếu chơi vs máy và hiện tại lượt máy thì chặn kéo
+      if (modeSelect.value === 'ai'){
+        const turn = game.turn();
+        const aiIsWhite = aiColorSelect.value === 'white';
+        if ((turn === 'w' && aiIsWhite) || (turn === 'b' && !aiIsWhite)) {
+          return false;
+        }
+      }
+      // Nếu chế độ 1v1 thì không chặn gì
+      // Chặn kéo quân không thuộc về người chơi (chỉ cần kiểm tra lượt để 2 người chơi dùng cùng 1 thiết bị)
+      const pieceColor = piece[0];
+      if ((game.turn() === 'w' && pieceColor !== 'w') || (game.turn() === 'b' && pieceColor !== 'b')) {
+        return false;
+      }
+    }
+
+    function onDrop(source, target) {
+      const move = game.move({ from: source, to: target, promotion: 'q' });
+      if (move === null) return 'snapback';
+      updateStatus();
+      // nếu chế độ vs máy -> cho máy đi
+      if (modeSelect.value === 'ai' && !game.game_over()) {
+        setTimeout(aiPlay, 300);
+      }
+    }
+
+    function onSnapEnd() {
+      board.position(game.fen());
+    }
+
+    function updateStatus() {
+      if (game.in_checkmate()) {
+        statusEl.textContent = 'Kết thúc: Chiếu hết. ' + (game.turn() === 'w' ? 'Đen thắng' : 'Trắng thắng');
+      } else if (game.in_draw()) {
+        statusEl.textContent = 'Hòa (draw).';
+      } else {
+        statusEl.textContent = `Lượt: ${game.turn() === 'w' ? 'Trắng' : 'Đen'}` + (game.in_check() ? ' — Check!' : '');
+      }
+    }
+
+    // đơn giản: hàm đánh giá vật chất
+    function evaluateBoard(g) {
+      const values = { p:1, n:3, b:3, r:5, q:9, k:0 };
+      const board = g.board();
+      let sum = 0;
+      for (let r=0;r<8;r++){
+        for (let c=0;c<8;c++){
+          const sq = board[r][c];
+          if (sq) {
+            const val = values[sq.type];
+            sum += sq.color === 'w' ? val : -val;
+          }
+        }
+      }
+      return sum;
+    }
+
+    // minimax with alpha-beta, depth from UI
+    function minimax(g, depth, alpha, beta, isMaximizing, aiColor) {
+      if (depth === 0 || g.game_over()) {
+        const eval = evaluateBoard(g);
+        return eval * (aiColor === 'w' ? 1 : -1);
+      }
+      const moves = g.moves();
+      if (isMaximizing) {
+        let maxEval = -Infinity;
+        for (let i=0;i<moves.length;i++){
+          g.move(moves[i]);
+          const eval = minimax(g, depth-1, alpha, beta, false, aiColor);
+          g.undo();
+          if (eval > maxEval) maxEval = eval;
+          if (eval > alpha) alpha = eval;
+          if (beta <= alpha) break;
+        }
+        return maxEval;
+      } else {
+        let minEval = Infinity;
+        for (let i=0;i<moves.length;i++){
+          g.move(moves[i]);
+          const eval = minimax(g, depth-1, alpha, beta, true, aiColor);
+          g.undo();
+          if (eval < minEval) minEval = eval;
+          if (eval < beta) beta = eval;
+          if (beta <= alpha) break;
+        }
+        return minEval;
+      }
+    }
+
+    function aiChooseMove() {
+      const aiColor = aiColorSelect.value; // 'white' or 'black'
+      const depth = parseInt(difficulty.value,10);
+      let bestMove = null;
+      let bestValue = -Infinity;
+      const moves = game.moves();
+      for (let i=0;i<moves.length;i++){
+        game.move(moves[i]);
+        const value = minimax(game, depth-1, -Infinity, Infinity, false, aiColor);
+        game.undo();
+        if (value > bestValue) {
+          bestValue = value;
+          bestMove = moves[i];
+        }
+      }
+      return bestMove;
+    }
+
+    function aiPlay() {
+      if (game.game_over()) return;
+      const aiColor = aiColorSelect.value[0]; // 'w' or 'b'
+      if (game.turn() !== aiColor[0]) return; // not AI's turn
+      const move = aiChooseMove();
+      if (move) {
+        game.move(move);
+        board.position(game.fen());
+        updateStatus();
+      }
+    }
+
+    // Buttons
+    startBtn.onclick = ()=> init();
+    undoBtn.onclick = ()=>{
+      game.undo();
+      board.position(game.fen());
+      updateStatus();
+    };
+    flipBtn.onclick = ()=> board.flip();
+
+    // Khi đổi chế độ, khởi tạo lại
+    modeSelect.onchange = ()=> init();
+    aiColorSelect.onchange = ()=> init();
+    difficulty.onchange = ()=>{};
+
+    // Khởi tạo lần đầu
+    init();
+  </script>
+</body>
+</html>
